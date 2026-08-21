@@ -12,6 +12,7 @@ import (
 	"encoding/base64"
 	"fmt"
 	"os"
+	"strings"
 
 	keygen "github.com/charmbracelet/keygen"
 	"golang.org/x/crypto/ssh"
@@ -69,7 +70,13 @@ func main() {
 	fmt.Printf("authorized_key=%s %s %s\n",
 		pub.Type(), base64.StdEncoding.EncodeToString(pub.Marshal()), name)
 	fmt.Printf("fingerprint=%s\n", ssh.FingerprintSHA256(pub))
-	fmt.Printf("key_type=%s\n", keyType)
+	// Derived from the PUBLIC KEY, not from the CLI selection. keygen.New()
+	// LOADS an existing key pair rather than regenerating it, so on a path that
+	// already holds a key the requested type is simply not what is on disk.
+	// Reporting the selection produced a self-contradicting block --
+	// `authorized_key=ssh-rsa` beside `key_type=ed25519` -- because
+	// authorized_key already came from pub.Type() and only this line did not.
+	fmt.Printf("key_type=%s\n", keyTypeFromPublicKey(pub))
 	// Emitted so the consumer can ASSERT the protection state instead of
 	// assuming it. Without this line there is no way to tell an intentionally
 	// unencrypted key from one whose passphrase went missing.
@@ -110,6 +117,28 @@ func passphraseState(pass string, set bool) (use string, encrypted, warnBlank bo
 		return pass, true, false
 	}
 	return "", false, set
+}
+
+// keyTypeFromPublicKey maps an SSH public-key algorithm name onto the short
+// key-type vocabulary this CLI emits, so `key_type` always describes the key that
+// was actually written or loaded.
+//
+// ECDSA is matched by prefix because the algorithm name carries the curve
+// (ecdsa-sha2-nistp256/384/521) while the CLI's vocabulary does not.
+func keyTypeFromPublicKey(pub ssh.PublicKey) string {
+	algo := pub.Type()
+	switch {
+	case algo == ssh.KeyAlgoED25519:
+		return string(keygen.Ed25519)
+	case algo == ssh.KeyAlgoRSA:
+		return string(keygen.RSA)
+	case strings.HasPrefix(algo, "ecdsa-sha2-"):
+		return string(keygen.ECDSA)
+	default:
+		// Unknown algorithm: report what the key actually says rather than
+		// forcing it into a vocabulary that does not cover it.
+		return algo
+	}
 }
 
 func baseName(p string) string {

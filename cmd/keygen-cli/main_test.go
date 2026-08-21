@@ -1,9 +1,11 @@
 package main
 
 import (
+	"path/filepath"
 	"testing"
 
 	keygen "github.com/charmbracelet/keygen"
+	"golang.org/x/crypto/ssh"
 )
 
 // The unsupported-type branch used to panic with an out-of-range index rather
@@ -90,5 +92,55 @@ func TestBlankIsNotTheSameAsAbsent(t *testing.T) {
 	_, _, warnBlank := passphraseState("", true)
 	if warnAbsent == warnBlank {
 		t.Fatalf("absent and blank both warn=%v -- the distinction is gone", warnBlank)
+	}
+}
+
+// keygen.New() LOADS an existing key pair rather than regenerating it, so on a
+// path that already holds a key the requested type is not what is on disk.
+// key_type used to report the CLI selection, producing a self-contradicting
+// block: `authorized_key=ssh-rsa` beside `key_type=ed25519`. authorized_key was
+// already derived from pub.Type(); only key_type was not.
+func TestKeyTypeFromPublicKey(t *testing.T) {
+	for _, kt := range []keygen.KeyType{keygen.Ed25519, keygen.RSA, keygen.ECDSA} {
+		t.Run(string(kt), func(t *testing.T) {
+			kp, err := keygen.New(filepath.Join(t.TempDir(), "k"), keygen.WithKeyType(kt))
+			if err != nil {
+				t.Fatalf("keygen.New(%v): %v", kt, err)
+			}
+			pub, err := ssh.NewPublicKey(kp.CryptoPublicKey())
+			if err != nil {
+				t.Fatalf("ssh.NewPublicKey: %v", err)
+			}
+			if got := keyTypeFromPublicKey(pub); got != string(kt) {
+				t.Errorf("keyTypeFromPublicKey(%s) = %q, want %q", pub.Type(), got, kt)
+			}
+		})
+	}
+}
+
+// The regression itself: generate RSA, then ask for the default (ed25519) on the
+// same path. The reported type must follow the key on disk, not the request.
+func TestExistingKeyWinsOverRequestedType(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "k")
+	if _, err := keygen.New(path, keygen.WithKeyType(keygen.RSA), keygen.WithWrite()); err != nil {
+		t.Fatalf("seed RSA: %v", err)
+	}
+	// Second call asks for ed25519 (the CLI default) against the existing RSA key.
+	kp, err := keygen.New(path, keygen.WithKeyType(keygen.Ed25519), keygen.WithWrite())
+	if err != nil {
+		t.Fatalf("reload: %v", err)
+	}
+	pub, err := ssh.NewPublicKey(kp.CryptoPublicKey())
+	if err != nil {
+		t.Fatalf("ssh.NewPublicKey: %v", err)
+	}
+	got := keyTypeFromPublicKey(pub)
+	if got != string(keygen.RSA) {
+		t.Errorf("reported %q for an existing RSA key, want %q", got, keygen.RSA)
+	}
+	// And the two output lines must agree with each other: authorized_key is
+	// built from pub.Type(), so a mismatch here is the self-contradicting block.
+	if pub.Type() != ssh.KeyAlgoRSA {
+		t.Errorf("authorized_key would say %q while key_type says %q", pub.Type(), got)
 	}
 }
