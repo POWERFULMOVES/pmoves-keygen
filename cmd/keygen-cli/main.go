@@ -36,8 +36,22 @@ func main() {
 	}
 
 	opts := []keygen.Option{keygen.WithKeyType(keyType), keygen.WithWrite()}
-	if pass := os.Getenv("KEYGEN_PASSPHRASE"); pass != "" {
+	// A BLANK KEYGEN_PASSPHRASE is not the same as an absent one, but the
+	// original treated them identically -- and blank is the likelier accident.
+	// A secrets funnel that has not run, or has a gap for this key, exports the
+	// variable with an EMPTY value; the key is then written UNENCRYPTED and
+	// nothing in the output says so. For tooling that mints fleet signing
+	// identities, a silently unprotected private key at rest is worth being
+	// loud about.
+	pass, encrypted, warnBlank := passphraseState(os.LookupEnv("KEYGEN_PASSPHRASE"))
+	if encrypted {
 		opts = append(opts, keygen.WithPassphrase(pass))
+	}
+	if warnBlank {
+		fmt.Fprintln(os.Stderr,
+			"keygen-cli: WARNING KEYGEN_PASSPHRASE is set but EMPTY -- writing an "+
+				"UNENCRYPTED private key. If the value was meant to be there it did "+
+				"not reach this process; check `make -C pmoves secrets-funnel`.")
 	}
 
 	kp, err := keygen.New(path, opts...)
@@ -56,6 +70,10 @@ func main() {
 		pub.Type(), base64.StdEncoding.EncodeToString(pub.Marshal()), name)
 	fmt.Printf("fingerprint=%s\n", ssh.FingerprintSHA256(pub))
 	fmt.Printf("key_type=%s\n", keyType)
+	// Emitted so the consumer can ASSERT the protection state instead of
+	// assuming it. Without this line there is no way to tell an intentionally
+	// unencrypted key from one whose passphrase went missing.
+	fmt.Printf("encrypted=%t\n", encrypted)
 }
 
 // parseKeyType maps the CLI's key-type argument onto a keygen.KeyType.
@@ -77,6 +95,21 @@ func parseKeyType(s string) (keygen.KeyType, error) {
 	default:
 		return "", fmt.Errorf("unsupported key type: %s", s)
 	}
+}
+
+// passphraseState decides what to do with KEYGEN_PASSPHRASE, given the raw
+// os.LookupEnv result. Extracted from main() for the same reason parseKeyType
+// was: the branch that matters is unreachable from a test while it lives
+// inline, and an untested branch here writes an unprotected private key.
+//
+// The three states are deliberately distinct. Absent means nobody asked for a
+// passphrase. Set-but-empty means somebody DID and the value did not arrive --
+// the secrets-funnel gap -- and is the only one that warrants a warning.
+func passphraseState(pass string, set bool) (use string, encrypted, warnBlank bool) {
+	if pass != "" {
+		return pass, true, false
+	}
+	return "", false, set
 }
 
 func baseName(p string) string {

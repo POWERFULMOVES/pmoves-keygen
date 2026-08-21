@@ -50,3 +50,45 @@ func TestBaseName(t *testing.T) {
 		}
 	}
 }
+
+// A blank KEYGEN_PASSPHRASE and an absent one produced identical behaviour, and
+// the difference is the whole point: blank is what a secrets funnel that has
+// not run leaves behind, and it wrote an UNENCRYPTED private key with nothing
+// in the output to say so. Verified against ssh-keygen before these were
+// written -- an encrypted=false key loads with an empty passphrase, and an
+// encrypted=true key refuses one -- so `encrypted` describes the file on disk
+// rather than merely echoing the variable.
+func TestPassphraseState(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		pass          string
+		set           bool
+		wantUse       string
+		wantEncrypted bool
+		wantWarn      bool
+	}{
+		{"absent: nobody asked for one", "", false, "", false, false},
+		{"set but EMPTY: the funnel gap", "", true, "", false, true},
+		{"populated", "hunter2", true, "hunter2", true, false},
+		{"whitespace is a real passphrase, not blank", " ", true, " ", true, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			use, encrypted, warn := passphraseState(tc.pass, tc.set)
+			if use != tc.wantUse || encrypted != tc.wantEncrypted || warn != tc.wantWarn {
+				t.Errorf("passphraseState(%q, %v) = (%q, %v, %v), want (%q, %v, %v)",
+					tc.pass, tc.set, use, encrypted, warn,
+					tc.wantUse, tc.wantEncrypted, tc.wantWarn)
+			}
+		})
+	}
+}
+
+// The two no-passphrase states must stay distinguishable. If this ever fails,
+// the warning has been lost and the funnel gap is silent again.
+func TestBlankIsNotTheSameAsAbsent(t *testing.T) {
+	_, _, warnAbsent := passphraseState("", false)
+	_, _, warnBlank := passphraseState("", true)
+	if warnAbsent == warnBlank {
+		t.Fatalf("absent and blank both warn=%v -- the distinction is gone", warnBlank)
+	}
+}
