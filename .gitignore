@@ -1,0 +1,15 @@
+# This repo was a library until cmd/keygen-cli was added, so `go build ./...`
+# never produced anything to ignore and the repo carries no .gitignore. It does
+# now: the binary lands in the repo root under its package name, untracked and
+# one `git add -A` away from being committed. In a key-generation tool that is
+# worth one line of prevention.
+/keygen-cli
+/keygen-cli.exe
+
+# Stray private key material. The CLI writes a private key wherever it is
+# pointed, and a run from inside the repo would leave one here.
+id_ed25519
+id_ecdsa
+id_rsa
+*.pub
+!**/testdata/**
