@@ -60,10 +60,7 @@ jobs:
       # ssh.ParseRawPrivateKey* at x/crypto v0.48.0 and failed the shim for two runs
       # before x/crypto v0.52.0 closed it.
       - name: govulncheck
-        uses: golang/govulncheck-action@v1
-        with:
-          go-version-input: '1.25.x'
-          go-package: ./...
+        run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...
 
       # The assertion this repo actually needs. A keygen tool's failure mode is not a
       # compile error -- it is a private key on disk with the wrong permissions, or an
