@@ -30,7 +30,7 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.24.x'
+          go-version: '1.25.x'
           cache: true
 
       - name: gofmt (fail on unformatted)
@@ -50,6 +50,20 @@ jobs:
 
       - name: go test
         run: go test ./... -count=1
+
+      # Kept inside THIS gate rather than relying on the upstream build.yml shim:
+      # build.yml already runs govulncheck, but it is charmbracelet's reusable
+      # workflow, so a future sync can change it. This repo generates key material,
+      # so a reachable advisory is a repo-level property, not an upstream courtesy.
+      # It is not hypothetical - GO-2026-5018 (DoS via pathological RSA/DSA
+      # parameters in golang.org/x/crypto/ssh) was reachable through keygen.New ->
+      # ssh.ParseRawPrivateKey* at x/crypto v0.48.0 and failed the shim for two runs
+      # before x/crypto v0.52.0 closed it.
+      - name: govulncheck
+        uses: golang/govulncheck-action@v1
+        with:
+          go-version-input: '1.25.x'
+          go-package: ./...
 
       # The assertion this repo actually needs. A keygen tool's failure mode is not a
       # compile error -- it is a private key on disk with the wrong permissions, or an
