@@ -1,0 +1,93 @@
+name: keygen-ci
+
+# The fork carried charmbracelet's reusable-workflow shims and nothing of its own,
+# so cmd/keygen-cli landed with tests that never ran on a pull request. This is the
+# repo's own gate. It is deliberately stronger than a generic Go CI copy: this repo
+# GENERATES KEY MATERIAL, so the build is not the interesting assertion -- the file
+# mode of the private key is.
+
+on:
+  pull_request:
+    branches: [PMOVES.AI-Edition-Hardened, master]
+  push:
+    branches: [PMOVES.AI-Edition-Hardened, master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: keygen-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: build, vet, test, and key-mode smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24.x'
+          cache: true
+
+      - name: gofmt (fail on unformatted)
+        run: |
+          unformatted="$(gofmt -l .)"
+          if [ -n "$unformatted" ]; then
+            echo "gofmt reports files needing formatting:"
+            echo "$unformatted"
+            exit 1
+          fi
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: go build
+        run: go build ./...
+
+      - name: go test
+        run: go test ./... -count=1
+
+      # The assertion this repo actually needs. A keygen tool's failure mode is not a
+      # compile error -- it is a private key on disk with the wrong permissions, or an
+      # unencrypted key written where an encrypted one was intended. Neither shows up
+      # in `go build`.
+      - name: key-mode smoke (private key must land 0600)
+        run: |
+          set -eu
+          workdir="$(mktemp -d)"
+          go build -o "$workdir/keygen-cli" ./cmd/keygen-cli
+          "$workdir/keygen-cli" "$workdir/id_ed25519" ed25519 > "$workdir/out.txt"
+          test -f "$workdir/id_ed25519"           || { echo "FAIL: private key was not written"; exit 1; }
+          test -f "$workdir/id_ed25519.pub"       || { echo "FAIL: public key was not written";  exit 1; }
+          mode="$(stat -c '%a' "$workdir/id_ed25519")"
+          test "$mode" = "600"                    || { echo "FAIL: private key mode is $mode, expected 600"; exit 1; }
+          grep -q '^fingerprint=SHA256:' "$workdir/out.txt" || { echo "FAIL: no SHA256 fingerprint emitted"; exit 1; }
+          grep -q '^encrypted=false'     "$workdir/out.txt" || { echo "FAIL: encrypted state not reported";  exit 1; }
+
+      - name: bad key type must exit non-zero, not panic
+        run: |
+          set -eu
+          workdir="$(mktemp -d)"
+          go build -o "$workdir/keygen-cli" ./cmd/keygen-cli
+          set +e
+          "$workdir/keygen-cli" "$workdir/id_bogus" bogus > /dev/null 2> "$workdir/err.txt"
+          rc=$?
+          set -e
+          test "$rc" -ne 0 || { echo "FAIL: unsupported key type exited 0"; exit 1; }
+          if grep -qi 'panic' "$workdir/err.txt"; then
+            echo "FAIL: unsupported key type panicked instead of reporting"; exit 1
+          fi
+
+      - name: blank KEYGEN_PASSPHRASE must warn (not fail silently)
+        run: |
+          set -eu
+          workdir="$(mktemp -d)"
+          go build -o "$workdir/keygen-cli" ./cmd/keygen-cli
+          KEYGEN_PASSPHRASE="" "$workdir/keygen-cli" "$workdir/id_blank" ed25519 > "$workdir/out.txt" 2> "$workdir/err.txt"
+          grep -q '^encrypted=true' "$workdir/out.txt" && { echo "NOTE: blank passphrase produced an encrypted key"; exit 0; }
+          grep -qi 'WARNING' "$workdir/err.txt" \
+            || { echo "FAIL: blank passphrase wrote an unencrypted key with no warning"; exit 1; }
