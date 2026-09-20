@@ -60,6 +60,17 @@ jobs:
       # ssh.ParseRawPrivateKey* at x/crypto v0.48.0 and failed the shim for two runs
       # before x/crypto v0.52.0 closed it.
       - name: govulncheck
+        # GOTOOLCHAIN=local is what the upstream charmbracelet/meta shim uses, and it is
+        # exactly what broke there: `@latest` now resolves to golang.org/x/vuln v1.8.0,
+        # which requires go >= 1.26.0, so the install dies on the runner's 1.25.x with
+        # "requires go >= 1.26.0 (running go 1.25.14; GOTOOLCHAIN=local)".
+        #
+        # Scoped to THIS step on purpose: `auto` lets the toolchain move for the vuln
+        # tool, which is a scan harness rather than the artifact. The gofmt/vet/build/
+        # test/key-mode steps above stay on the repo's declared language version, which
+        # is what actually ships.
+        env:
+          GOTOOLCHAIN: auto
         run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...
 
       # The assertion this repo actually needs. A keygen tool's failure mode is not a
