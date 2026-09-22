@@ -22,7 +22,7 @@ concurrency:
 
 jobs:
   test:
-    name: build, vet, test, and key-mode smoke
+    name: keygen-gate
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
